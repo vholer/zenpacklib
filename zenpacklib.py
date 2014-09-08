@@ -925,7 +925,7 @@ class ZenPackSpec(object):
 
         def getComponentTree(self, uid=None, id=None, **kwargs):
             # original is injected by monkeypatch.
-            result = original(self, uid=uid, id=id, **kwargs)
+            result = original(self, uid=uid, id=id, **kwargs)  # noqa
 
             # Only change the order for custom device types.
             meta_type = self._getFacade().getInfo(uid=uid).meta_type
@@ -2508,7 +2508,7 @@ def EnumInfoProperty(data, enum):
                 return Zuul.info(enum[data])
             except Exception:
                 return Zuul.info(data)
-            return Zuul.info(getattr(self._object, method_name))
+            return Zuul.info(getattr(self._object, method_name))  # noqa
     return property(lambda x: getter(x, data, enum))
 
 
