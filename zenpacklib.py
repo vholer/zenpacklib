@@ -2307,10 +2307,6 @@ class ClassRelationshipSpec(object):
 
         remote_spec = self.class_.zenpack.classes.get(self.remote_classname)
 
-        # do not show if grid turned off
-        if self.grid_display is False:
-            return []
-
         # No reason to show a column for the device since we're already
         # looking at the device.
         if not remote_spec or remote_spec.is_device:
@@ -2383,8 +2379,17 @@ def enableTesting():
         return
 
     from Products.ZenTestCase.BaseTestCase import BaseTestCase
+    from transaction._transaction import Transaction
 
     class TestCase(BaseTestCase):
+
+        # As in BaseTestCase, the default behavior is to disable
+        # all logging from within a unit test.  To enable it,
+        # set disableLogging = False in your subclass.  This is
+        # recommended during active development, but is too noisy
+        # to leave as the default.
+        disableLogging = True
+
         def afterSetUp(self):
             super(TestCase, self).afterSetUp()
 
@@ -2420,6 +2425,15 @@ def enableTesting():
                 zcml.load_config('configure.zcml', ZenPacks.zenoss.Impact)
             except ImportError:
                 return
+
+            # BaseTestCast.afterSetUp already hides transaction.commit. So we also
+            # need to hide transaction.abort.
+            self._transaction_abort = Transaction.abort
+            Transaction.abort = lambda *x: None
+
+        def beforeTearDown(self):
+            if hasattr(self, '_transaction_abort'):
+                Transaction.abort = self._transaction_abort
 
 
 def ucfirst(text):
