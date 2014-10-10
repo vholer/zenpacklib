@@ -73,7 +73,7 @@ class RelationFactory(object):
         # reverse this if its a one->many .. so its consistently displayed
         if lcard == '' and rcard in ['*', '++']:
             return self.reverse().yuml()
-        return "[{0}]{1}{2} -.- {3}{4}[{5}]".format(lc, lcard, lreln, rreln, rcard, rc)
+        return "[{0}]{1}{2} -.-{3} {4}[{5}]".format(lc, lcard, lreln, rreln, rcard, rc)
 
 
 def print_relationships_yuml(relationships):
@@ -108,7 +108,7 @@ prop = lCurly + Group(propAttributes) + rCurly
 props = delimitedList(prop) + Optional(comma)
 listObj = (lBracket + props + rBracket).setName('listObj')
 dictObj = (lCurly + propAttributes + rCurly).setName('dictObj')
-panel_klass = (start + (dictOf(noSpaceWord + colon, (quotedWords ^ listObj ^ dictObj) + Optional(comma)))) 
+panel_klass = (start + (dictOf(noSpaceWord + colon, (quotedWords ^ listObj ^ dictObj) + Optional(comma))))
 
 propAttribute_str = "componentType: 'HMCServer'"
 propAttribute_str2 = "header: _t('Build Level')"
@@ -272,7 +272,7 @@ def parse_panel_js(data, klasses):
 
         if klassId not in klasses:
              klasses[klassId] = {}
-        
+
         if 'properties' not in klasses[klassId]:
             klasses[klassId]['properties'] = {}
 
@@ -284,17 +284,14 @@ def parse_panel_js(data, klasses):
             # Set the AutoExpandColumn if Found
             if 'autoExpandColumn' in klass:
                 propId = klass['autoExpandColumn']
-
-                if propId not in klasses[klassId]['properties']:
-                    klasses[klassId]['properties'][propId] = {}
-
-                klasses[klassId]['properties'][propId]['width'] = 'auto'
+                klasses[klassId]['auto_expand_column'] = propId
                 del klass['autoExpandColumn']
 
             # Set the sortInfo if Found
             if 'sortInfo' in klass:
                 propId = klass['sortInfo']['field']
-                klasses[klassId]['properties'][propId]['sort_direction'] = klass['sortInfo']['direction']
+                klasses[klassId]['sort_column'] = propId
+                klasses[klassId]['sort_direction'] = klass['sortInfo']['direction']
                 del klass['sortInfo']
 
             for p in klass['columns']:
@@ -303,7 +300,7 @@ def parse_panel_js(data, klasses):
 
                 # zpl provides these automatically
                 if propId in ['severity', 'monitored', 'locking']:
-                    continue 
+                    continue
 
                 del(data['id'])
 
@@ -321,6 +318,9 @@ def parse_panel_js(data, klasses):
                 data['grid_display'] = True
 
                 for key,val in data.items():
+                    if key == 'width':
+                        key = 'label_width'
+                        val = int(val)
                     if propId not in klasses[klassId]['properties']:
                         klasses[klassId]['properties'][propId] = {}
                     klasses[klassId]['properties'][propId][key] = val

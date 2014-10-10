@@ -1333,6 +1333,8 @@ class ClassSpec(Spec):
             short_label=None,
             plural_short_label=None,
             auto_expand_column='name',
+            sort_column=None,
+            sort_direction=None,
             label_width=80,
             plural_label_width=None,
             content_width=None,
@@ -1372,6 +1374,16 @@ class ClassSpec(Spec):
             self.plural_short_label = plural_short_label or self.plural_label
 
         self.auto_expand_column = auto_expand_column
+        self.sort_column = sort_column
+
+        if sort_direction not in (None, 'asc', 'dsc', 'ASC', 'DSC'):
+            LOG.warning('Sort Direction not one of asc, dsc or None')
+            self.sort_direction = None
+        else:
+            if sort_direction:
+                self.sort_direction = sort_direction.lower()
+            else:
+                self.sort_direction = 'asc'
 
         self.label_width = int(label_width)
         self.plural_label_width = plural_label_width or self.label_width + 7
@@ -2067,12 +2079,17 @@ class ClassSpec(Spec):
                 "%s: %s custom columns exceed 750 pixels (%s)",
                 self.zenpack.name, self.name, width)
 
+        self.sortInfo = None
+        if self.sort_column:
+            self.sortInfo = "{{field: '{sort_column}', direction: '{direction}'}},\n".format(sort_column=self.sort_column, direction=self.sort_direction)
+
         return (
             "ZC.{meta_type}Panel = Ext.extend(ZC.ZPLComponentGridPanel, {{"
             "    constructor: function(config) {{\n"
             "        config = Ext.applyIf(config||{{}}, {{\n"
             "            componentType: '{meta_type}',\n"
             "            autoExpandColumn: '{auto_expand_column}',\n"
+            "{sortInfo}"
             "            fields: [{fields}],\n"
             "            columns: [{columns}]\n"
             "        }});\n"
@@ -2082,6 +2099,7 @@ class ClassSpec(Spec):
             "\n"
             "Ext.reg('{meta_type}Panel', ZC.{meta_type}Panel);\n"
             .format(
+                sortInfo=self.sortInfo,
                 meta_type=self.meta_type,
                 auto_expand_column=self.auto_expand_column,
                 fields=','.join(
