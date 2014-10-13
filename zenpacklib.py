@@ -2079,9 +2079,10 @@ class ClassSpec(Spec):
                 "%s: %s custom columns exceed 750 pixels (%s)",
                 self.zenpack.name, self.name, width)
 
-        self.sortInfo = None
+        self.sortInfo = ""
         if self.sort_column:
-            self.sortInfo = "{{field: '{sort_column}', direction: '{direction}'}},\n".format(sort_column=self.sort_column, direction=self.sort_direction)
+            self.sortInfo = "            sortInfo: {{field: '{sort_column}', direction: '{direction}'}},\n"\
+                            .format(sort_column=self.sort_column, direction=self.sort_direction)
 
         return (
             "ZC.{meta_type}Panel = Ext.extend(ZC.ZPLComponentGridPanel, {{"
