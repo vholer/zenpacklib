@@ -27,7 +27,7 @@ This module provides a single integration point for common ZenPacks.
 """
 
 # PEP-396 version. (https://www.python.org/dev/peps/pep-0396/)
-__version__ = "1.1.0dev"
+__version__ = "1.0.2dev"
 
 
 import logging
@@ -219,6 +219,10 @@ class ZenPack(ZenPackBase):
             for mtname, mtspec in dcspec.templates.iteritems():
                 mtspec.create(self.dmd)
 
+        # Load event classes
+        for ecname, ecspec in self.event_classes.iteritems():
+            ecspec.instantiate(self.dmd)
+
     def remove(self, app, leaveObjects=False):
         if self._v_specparams is None:
             return
@@ -305,6 +309,7 @@ class ZenPack(ZenPackBase):
                 LOG.info('Removing %s relationships from existing devices.' % self.id)
                 self._buildDeviceRelations()
 
+            # Remove DeviceClasses with remove flag set
             for dcname, dcspec in self.device_classes.iteritems():
                 if dcspec.remove:
                     organizerPath = '/Devices/' + dcspec.path.lstrip('/')
@@ -316,6 +321,30 @@ class ZenPack(ZenPackBase):
 
                     LOG.info('Removing DeviceClass %s' % dcspec.path)
                     app.dmd.Devices.manage_deleteOrganizer(organizerPath)
+
+            # Remove EventClasses with remove flag set
+            for ecname, ecspec in self.event_classes.iteritems():
+                organizerPath = ecspec.path
+                if ecspec.remove:
+                    try:
+                        app.dmd.Events.getOrganizer(organizerPath)
+                    except KeyError:
+                        LOG.warning('Unable to remove EventClass %s (not found)' % ecspec.path)
+                        continue
+
+                    LOG.info('Removing EventClass %s' % ecspec.path)
+                    app.dmd.Events.manage_deleteOrganizer(organizerPath)
+                else:
+                    try:
+                        organizer=app.dmd.Events.getOrganizer(organizerPath)
+                    except KeyError:
+                        continue
+
+                    for mapping_id, mapping_spec in ecspec.mappings.items():
+                        if mapping_spec.remove:
+                            LOG.info('Removing EventClassInst %s @ %s' % (mapping_id, ecspec.path))
+                            organizer.removeInstances(organizer.prepId(mapping_id))
+
 
         super(ZenPack, self).remove(app, leaveObjects=leaveObjects)
 
@@ -1395,6 +1424,7 @@ class ZenPackSpec(Spec):
             classes=None,
             class_relationships=None,
             device_classes=None,
+            event_classes=None,
             _source_location=None):
         """
             Create a ZenPack Specification
@@ -1408,6 +1438,8 @@ class ZenPackSpec(Spec):
             :yaml_block_style class_relationships: True
             :param device_classes: DeviceClass Specs
             :type device_classes: SpecsParameter(DeviceClassSpec)
+            :param event_classes: EventClass Specs
+            :type event_classes: SpecsParameter(EventClassSpec)
             :param classes: Class Specs
             :type classes: SpecsParameter(ClassSpec)
         """
@@ -1420,7 +1452,8 @@ class ZenPackSpec(Spec):
             zProperties=zProperties,
             classes=classes,
             class_relationships=class_relationships,
-            device_classes=device_classes)
+            device_classes=device_classes,
+            event_classes=event_classes)
 
         self.name = name
         self.id_prefix = name.replace(".", "_")
@@ -1513,6 +1546,10 @@ class ZenPackSpec(Spec):
         # Device Classes
         self.device_classes = self.specs_from_param(
             DeviceClassSpec, 'device_classes', device_classes)
+
+        # Event Classes
+        self.event_classes = self.specs_from_param(
+            EventClassSpec, 'event_classes', event_classes)
 
     @property
     def ordered_classes(self):
@@ -1746,6 +1783,7 @@ class ZenPackSpec(Spec):
             }
 
         attributes['device_classes'] = self.device_classes
+        attributes['event_classes'] = self.event_classes
         attributes['_v_specparams'] = self.specparams
         attributes['NEW_COMPONENT_TYPES'] = self.NEW_COMPONENT_TYPES
         attributes['NEW_RELATIONS'] = self.NEW_RELATIONS
@@ -1821,6 +1859,131 @@ class DeviceClassSpec(Spec):
         self.templates = self.specs_from_param(
             RRDTemplateSpec, 'templates', templates)
 
+class EventClassMappingSpec(Spec):
+
+      """Initialize a EventClassMapping via Python at install time."""
+      def __init__(
+              self,
+              eventclass_spec,
+              name,
+              eventClassKey='',
+              sequence=None,
+              rule='',
+              regex='',
+              example='',
+              transform='',
+              explanation='',
+              resolution='',
+              remove=False,
+              _source_location=None):
+          """
+            :param eventClassKey: Event Class Key ( whats the default key )
+            :type eventClassKey: str
+            :param sequence: Define the match priority. Lower is a higher priority
+            :type sequence: int
+            :param rule: a python expression to match an event
+            :type rule: str
+            :param regex: a regular expression to match an event
+            :type regex: str
+            :param transform: a python expression for transformation
+            :type transform: str
+            :param example: debugging string to use in the regular expression ui testing.
+            :type example: str
+            :param explanation: Enter a textual description for matches for this event class mapping. Use in conjunction with the Resolution field.
+            :type explanation: str
+            :param resolution: Use the Resolution field to enter resolution instructions for clearing the event.
+            :type resolution: str
+            :param remove: Remove the Mapping when the ZenPack is removed
+            :type remove: bool
+          """
+          super(EventClassMappingSpec, self).__init__(_source_location=_source_location)
+          self.eventclass_spec = eventclass_spec
+          self.name = name
+          self.eventClassKey=eventClassKey
+          self.sequence=sequence
+          self.transform=transform
+          self.rule=rule
+          self.regex=regex
+          self.example=example
+          self.explanation=explanation
+          self.resolution=resolution
+          self.remove = remove
+
+      def create(self, eventclass):
+          mapping = eventclass.instances._getOb(eventclass.prepId(self.name), False)
+          if not mapping:
+               LOG.info('Creating mapping %s @ %s' % (self.name, self.eventclass_spec.path))
+
+               mapping = eventclass.createInstance(self.name)
+          _properties = ['eventClassKey', 'sequence', 'rule', 'regex',
+                         'example', 'explanation', 'resolution', 'transform']
+          for x in _properties:
+              if getattr(mapping, x) != getattr(self, x):
+                  LOG.info('Setting %s on mapping %s @ %s' % (x, self.name, self.eventclass_spec.path))
+                  setattr(mapping, x, getattr(self, x, None))
+
+class EventClassSpec(Spec):
+
+      """Initialize a EventClass via Python at install time."""
+      def __init__(
+              self,
+              zenpack_spec,
+              path,
+              description='',
+              transform='',
+              create=True,
+              remove=False,
+              mappings=None,
+              _source_location=None):
+          """
+            :param create: Create the EventClass with ZenPack installation, if it does not exist?
+            :type create: bool
+            :param remove: Remove the EventClass when ZenPack is removed?
+            :type remove: bool
+            :param description: Description of the EventClass
+            :type description: str
+            :param transform: EventClass Transformation
+            :type transform: str
+            :param mappings: TODO
+            :type mappings: SpecsParameter(EventClassMappingSpec)
+          """
+          super(EventClassSpec, self).__init__(_source_location=_source_location)
+          self.zenpack_spec = zenpack_spec
+          self.path = path
+          self.description = description
+          self.transform = transform
+          self.create = bool(create)
+          self.remove = bool(remove)
+
+          self.mappings = self.specs_from_param(
+              EventClassMappingSpec, 'mappings', mappings)
+
+      def instantiate(self, dmd):
+          if self.create:
+              try:
+                  dmd.Events.getOrganizer(self.path)
+              except KeyError:
+                  LOG.info('Creating EventClass %s' % self.path)
+                  dmd.Events.createOrganizer(self.path)
+
+          ecObject = dmd.Events.getOrganizer(self.path)
+
+          if self.description != '':
+              if not ecObject.description == self.description:
+                  LOG.info('Setting description on %s' % (self.path))
+                  ecObject.description = self.description
+
+          if self.transform != '':
+              if not ecObject.transform == self.transform:
+                  LOG.info('Setting transform on %s' % (self.path))
+                  ecObject.transform = self.transform
+
+          # Flag this as a ZPL managed object, that is, one that should not be
+          # exported to objects.xml  (contained objects will also be excluded)
+          ecObject.zpl_managed = True
+
+          for mapping_id, mapping_spec in self.mappings.items():
+              mapping_spec.create(ecObject)
 
 class ZPropertySpec(Spec):
 
@@ -3778,12 +3941,7 @@ class RRDDatasourceSpec(Spec):
         if self.extra_params:
             for param, value in self.extra_params.iteritems():
                 if param in [x['id'] for x in datasource._properties]:
-                    # handle an ui test error that expects the oid value to be a string
-                    # this is to workaround a ui bug known in 4.5 and 5.0.3
-                    if type_ == 'BasicDataSource.SNMP' and param == 'oid':
-                        setattr(datasource, param, str(value))
-                    else:
-                        setattr(datasource, param, value)
+                    setattr(datasource, param, value)
                 else:
                     raise ValueError("%s is not a valid property for datasource of type %s" % (param, type_))
 
@@ -4162,7 +4320,7 @@ class SpecParams(object):
 
 
 class ZenPackSpecParams(SpecParams, ZenPackSpec):
-    def __init__(self, name, zProperties=None, class_relationships=None, classes=None, device_classes=None, **kwargs):
+    def __init__(self, name, zProperties=None, class_relationships=None, classes=None, device_classes=None, event_classes=None, **kwargs):
         SpecParams.__init__(self, **kwargs)
         self.name = name
 
@@ -4183,6 +4341,9 @@ class ZenPackSpecParams(SpecParams, ZenPackSpec):
         self.device_classes = self.specs_from_param(
             DeviceClassSpecParams, 'device_classes', device_classes, leave_defaults=True)
 
+        self.event_classes = self.specs_from_param(
+            EventClassSpecParams, 'event_classes', event_classes, leave_defaults=True)
+
 
 class DeviceClassSpecParams(SpecParams, DeviceClassSpec):
     def __init__(self, zenpack_spec, path, zProperties=None, templates=None, **kwargs):
@@ -4192,6 +4353,65 @@ class DeviceClassSpecParams(SpecParams, DeviceClassSpec):
         self.templates = self.specs_from_param(
             RRDTemplateSpecParams, 'templates', templates)
 
+class EventClassMappingSpecParams(SpecParams, EventClassMappingSpec):
+    def __init__(self, eventclass_spec, name, eventClassKey='', sequence='', rule='', regex='', example='', explanation='', resolution='', transform='', remove='', **kwargs):
+        SpecParams.__init__(self, **kwargs)
+        self.name = name
+        self.eventClassKey=eventClassKey
+        self.sequence=sequence
+        self.rule=rule
+        self.regex=regex
+        self.example=example
+        self.explanation=explanation
+        self.resolution=resolution
+        self.transform=transform
+        self.remove=remove
+
+    @classmethod
+    def fromObject(cls, mapping, remove=False):
+        self = object.__new__(cls)
+        SpecParams.__init__(self)
+        mapping = aq_base(mapping)
+
+        _properties = ['eventClassKey', 'sequence', 'rule', 'regex',
+                       'example', 'explanation', 'resolution', 'transform']
+        for x in _properties:
+            setattr(self, x, getattr(mapping, x, None))
+
+        self.remove = remove
+        return self
+
+class EventClassSpecParams(SpecParams, EventClassSpec):
+    def __init__(self, zenpack_spec, path, description='', transform='', mappings=None, **kwargs):
+        SpecParams.__init__(self, **kwargs)
+        self.path = path
+        self.description = description
+        self.transform = transform
+        self.mappings = self.specs_from_param(
+            EventClassMappingSpecParams, 'mappings', mappings)
+
+    @classmethod
+    def new(cls, eventclass, description='', transform='', create=False, remove=False):
+        self = object.__new__(cls)
+        SpecParams.__init__(self)
+        self.path = eventclass
+        self.description = description
+        self.transform = transform
+        self.create = create
+        self.remove = remove
+        return self
+
+    @classmethod
+    def fromObject(cls, eventclass, create=False, remove=False):
+        self = object.__new__(cls)
+        SpecParams.__init__(self)
+
+        self.description = eventclass.description
+        self.transform = eventclass.transform
+        self.create = create
+        self.remove = remove
+        self.mappings = {x.id: EventClassMappingSpecParams.fromObject(x) for x in eventclass.instances()}
+        return self
 
 class ZPropertySpecParams(SpecParams, ZPropertySpec):
     def __init__(self, zenpack_spec, name, **kwargs):
@@ -5071,6 +5291,8 @@ if YAML_INSTALLED:
 
     Dumper.add_representer(ZenPackSpec, represent_zenpackspec)
     Dumper.add_representer(DeviceClassSpec, represent_spec)
+    Dumper.add_representer(EventClassSpec, represent_spec)
+    Dumper.add_representer(EventClassMappingSpec, represent_spec)
     Dumper.add_representer(ZPropertySpec, represent_spec)
     Dumper.add_representer(ClassSpec, represent_spec)
     Dumper.add_representer(ClassPropertySpec, represent_spec)
@@ -5082,6 +5304,8 @@ if YAML_INSTALLED:
 
     Dumper.add_representer(ZenPackSpecParams, represent_zenpackspec)
     Dumper.add_representer(DeviceClassSpecParams, represent_spec)
+    Dumper.add_representer(EventClassSpecParams, represent_spec)
+    Dumper.add_representer(EventClassMappingSpecParams, represent_spec)
     Dumper.add_representer(ZPropertySpecParams, represent_spec)
     Dumper.add_representer(ClassSpecParams, represent_spec)
     Dumper.add_representer(ClassPropertySpecParams, represent_spec)
@@ -6085,6 +6309,9 @@ Available commands and example options:
   # Export existing monitoring templates to yaml.
   dump_templates ZenPacks.example.AlreadyInstalled
 
+  # Export existing event class or event class mappings
+  dump_eventClasses ZenPacks.example.AlreadyInstalled
+
   # Convert a pre-release zenpacklib.ZenPackSpec to yaml.
   py_to_yaml ZenPacks.example.AlreadyInstalled
 
@@ -6166,6 +6393,15 @@ setup(
 )
 """.lstrip()
 
+def stripped_yaml_dump(specparams, Dumper=Dumper):
+    outputfile = yaml.dump(specparams, Dumper=Dumper)
+
+    # tweak the yaml slightly.
+    outputfile = outputfile.replace("__builtin__.object", "object")
+    outputfile = re.sub(r"!!float '(\d+)'", r"\1", outputfile)
+    outputfile = re.sub(r"!ZenPackSpec", r"", outputfile)
+
+    print outputfile
 
 if __name__ == '__main__':
     from Products.ZenUtils.ZenScriptBase import ZenScriptBase
@@ -6252,13 +6488,7 @@ if __name__ == '__main__':
                     # And merge in the templates we found in ZODB.
                     specparams.device_classes[dc_name].templates.update(templates[dc_name])
 
-                outputfile = yaml.dump(specparams, Dumper=Dumper)
-
-                # tweak the yaml slightly.
-                outputfile = outputfile.replace("__builtin__.object", "object")
-                outputfile = re.sub(r"!!float '(\d+)'", r"\1", outputfile)
-
-                print outputfile
+                stripped_yaml_dump(specparams, Dumper=Dumper)
 
             elif len(args) == 2 and args[0] == 'dump_templates':
                 zenpack_name = args[1]
@@ -6268,8 +6498,14 @@ if __name__ == '__main__':
                 zpsp = ZenPackSpecParams(zenpack_name, device_classes={x: {} for x in templates})
                 for dc_name in templates:
                     zpsp.device_classes[dc_name].templates = templates[dc_name]
+                stripped_yaml_dump(zpsp, Dumper=Dumper)
 
-                print yaml.dump(zpsp, Dumper=Dumper)
+            elif len(args) == 2 and args[0] == 'dump_eventClasses':
+                zenpack_name = args[1]
+                self.connect()
+                eventclasses = self.zenpack_eventclassspecs(zenpack_name)
+                zpsp = ZenPackSpecParams(zenpack_name, event_classes=eventclasses)
+                stripped_yaml_dump(zpsp, Dumper=Dumper)
 
             elif len(args) == 3 and args[0] == "class_diagram":
                 diagram_type = args[1]
@@ -6387,6 +6623,38 @@ if __name__ == '__main__':
                     dc_name = template.deviceClass().getOrganizerName()
                     templates[dc_name][template.id] = RRDTemplateSpecParams.fromObject(template)
             return templates
+
+        def zenpack_eventclassspecs(self, zenpack_name):
+            zenpack = self.dmd.ZenPackManager.packs._getOb(zenpack_name, None)
+            if zenpack is None:
+                LOG.error("ZenPack '%s' not found." % zenpack_name)
+                return
+
+            eventclasses = collections.defaultdict(dict)
+            for eventclass in [x for x in zenpack.packables() if x.meta_type == 'EventClass']:
+                ec_name = "/" + "/".join(eventclass.getPrimaryUrlPath().split('/')[4:])
+                eventclasses[ec_name] = EventClassSpecParams.fromObject(eventclass, create=True, remove=True)
+                for subclass in eventclass.getSubEventClasses():
+                    ec_name = "/" + "/".join(subclass.getPrimaryUrlPath().split('/')[4:])
+                    # Remove = false because the removing the parent will remove the child # This is a performance optimization
+                    eventclasses[ec_name] = EventClassSpecParams.fromObject(subclass, create=True, remove=False)
+
+            for eventclassinst in [x for x in zenpack.packables() if x.meta_type == 'EventClassInst']:
+                eventclass = eventclassinst.eventClass()
+                ec_name = "/" + "/".join(eventclass.getPrimaryUrlPath().split('/')[4:])
+
+                # Do not create/remove the eventclasses as we do not own them
+                eventclassspec = eventclasses.get(ec_name, EventClassSpecParams.new(ec_name, remove=False, create=False))
+                if eventclassinst.id in eventclassspec.mappings:
+                    # we have already gotten this instance and we don't need a duplicate
+                    continue
+                else:
+                    # This zenpack owns this mapping, lets make sure to remove it when we are done.
+                    eventclassspec.mappings[eventclassinst.id] = EventClassMappingSpecParams.fromObject(eventclassinst, remove=True)
+                eventclasses[ec_name] = eventclassspec
+
+            return eventclasses
+
 
     script = ZPLCommand()
     script.run()
